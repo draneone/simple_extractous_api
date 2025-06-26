@@ -1,0 +1,41 @@
+services:
+  extractous-api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: extractous-api
+    restart: unless-stopped
+    ports:
+      - "8280:8080"
+    environment:
+      - RUST_LOG=info
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8080
+      - TESSERACT_LANGUAGES=eng+rus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ./temp_uploads:/app/temp_uploads
+    networks:
+      - extractous-network
+
+networks:
+  extractous-network:
+    driver: bridge

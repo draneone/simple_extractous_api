@@ -1,0 +1,17 @@
+target/
+Dockerfile*
+docker-compose*
+.git
+.gitignore
+README.md
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+documents/*
+results/*
+*.tmp
+*.swp
+*.swo
+*~
