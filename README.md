@@ -64,6 +64,78 @@ Content-Type: application/json
 }
 ```
 
+## Client-Server File Mapping
+
+When uploading multiple files, the API ensures you can map results back to your original files:
+
+### File Upload Example
+```bash
+curl -X POST http://localhost:8080/parse/files \
+  -F "file=@document1.pdf" \
+  -F "file=@document2.docx" \
+  -F "file=@Прайс_файл.pdf"
+```
+
+### Response Structure
+```json
+{
+  "request_id": "uuid-here",
+  "results": [
+    {
+      "id": "uuid-file-0",
+      "file_name": "document1.pdf",
+      "input_index": 0,
+      "extracted_text": "...",
+      "error": null
+    },
+    {
+      "id": "uuid-file-1", 
+      "file_name": "document2.docx",
+      "input_index": 1,
+      "extracted_text": "...",
+      "error": null
+    },
+    {
+      "id": "uuid-file-2",
+      "file_name": "Прайс_файл.pdf",
+      "input_index": 2,
+      "extracted_text": "...",
+      "error": null
+    }
+  ],
+  "total_files_processed": 3,
+  "successful_extractions": 3,
+  "failed_extractions": 0
+}
+```
+
+### Mapping Results to Input Files
+
+**Key Fields for Mapping:**
+- `input_index`: 0-based index corresponding to the order files were uploaded
+- `file_name`: Original filename as uploaded (preserves Unicode characters)
+- `id`: Unique identifier for this specific extraction
+
+**Client Implementation:**
+```javascript
+// When uploading files
+const files = [file1, file2, file3]; // Your input files
+
+// After receiving response
+response.results.forEach(result => {
+  const originalFile = files[result.input_index];
+  console.log(`File: ${originalFile.name}`);
+  console.log(`Server filename: ${result.file_name}`);
+  console.log(`Extracted text: ${result.extracted_text}`);
+});
+```
+
+**Handling Unicode Filenames:**
+The server sanitizes filenames internally to avoid Unicode encoding issues with the Java/Tika layer, but always returns the original filename in the response. This means:
+- `file_name` in response = original filename (e.g., "Прайс list на 2 квартал 2025 г v1.pdf")
+- Internal processing uses ASCII-safe filename (e.g., "___list____2_______2025___v1.pdf")
+- Client mapping works correctly regardless of Unicode characters
+
 ## Configuration
 
 ### Environment Variables

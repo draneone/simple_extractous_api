@@ -25,6 +25,24 @@ use tracing::{info, warn, error, debug, instrument};
 use processor::create_extractor;
 use uuid::Uuid;
 
+/// Sanitizes a filename by replacing non-ASCII characters with safe alternatives
+fn sanitize_filename(filename: &str) -> String {
+    filename
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else if c.is_whitespace() {
+                '_'
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
 /// Represents a list of URLs to be parsed.
 #[derive(Debug, Deserialize)]
 struct UrlListRequest {
@@ -35,8 +53,13 @@ struct UrlListRequest {
 #[derive(Debug, Serialize, Deserialize)]
 struct ExtractionResult {
     id: String,
+    /// For URLs: the original URL
     url: Option<String>,
+    /// For files: the original filename as uploaded by the client
     file_name: Option<String>,
+    /// The index of this file/URL in the original request (0-based)
+    /// This allows clients to map results back to their input
+    input_index: usize,
     extracted_text: String,
     metadata: serde_json::Value,
     processing_time_ms: u64,
@@ -170,6 +193,7 @@ async fn parse_urls_handler(
                     id: result_id,
                     url: Some(url_str.clone()),
                     file_name: None,
+                    input_index: index,
                     extracted_text,
                     metadata: serde_json::to_value(metadata).unwrap_or_default(),
                     processing_time_ms: processing_time,
@@ -192,6 +216,7 @@ async fn parse_urls_handler(
                     id: result_id,
                     url: Some(url_str.clone()),
                     file_name: None,
+                    input_index: index,
                     extracted_text: String::new(),
                     metadata: serde_json::Value::Null,
                     processing_time_ms: processing_time,
@@ -257,13 +282,23 @@ async fn parse_files_handler(
         total_files += 1;
         
         let content_disposition = field.content_disposition();
-        let filename = content_disposition
+        let default_filename = format!("unknown_file_{}", total_files);
+        let original_filename = content_disposition
             .and_then(|cd| cd.get_filename())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(format!("unknown_file_{}", total_files)));
+            .unwrap_or(&default_filename);
 
-        let file_path = temp_dir.join(&filename);
-        let file_name_str = filename.to_string_lossy().into_owned();
+        // Keep the original filename for response
+        let file_name_str = original_filename.to_string();
+        
+        // Create a sanitized filename for the filesystem
+        let sanitized_filename = sanitize_filename(original_filename);
+        let safe_filename = if sanitized_filename.is_empty() {
+            format!("file_{}", total_files)
+        } else {
+            sanitized_filename
+        };
+        
+        let file_path = temp_dir.join(&safe_filename);
         
         debug!(
             request_id = %request_id,
@@ -308,6 +343,7 @@ async fn parse_files_handler(
                     id: result_id,
                     url: None,
                     file_name: Some(file_name_str),
+                    input_index: total_files - 1, // total_files is incremented before processing
                     extracted_text,
                     metadata: serde_json::to_value(metadata).unwrap_or_default(),
                     processing_time_ms: processing_time,
@@ -331,6 +367,7 @@ async fn parse_files_handler(
                     id: result_id,
                     url: None,
                     file_name: Some(file_name_str),
+                    input_index: total_files - 1, // total_files is incremented before processing
                     extracted_text: String::new(),
                     metadata: serde_json::Value::Null,
                     processing_time_ms: processing_time,
@@ -591,9 +628,19 @@ mod tests {
         assert!(bad_request.to_string().contains("Bad request"));
     }
 
-    #[test]
+    #[tokio::test]
     async fn test_user_error_status_codes() {
         assert_eq!(UserError::InternalError("test".to_string()).status_code(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(UserError::BadRequest("test".to_string()).status_code(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_sanitize_filename() {
+        assert_eq!(sanitize_filename("normal_file.pdf"), "normal_file.pdf");
+        assert_eq!(sanitize_filename("Прайс kbcn на 2 квартал 2025 г v1.pdf"), "___kbcn____2_______2025___v1.pdf");
+        assert_eq!(sanitize_filename("файл с пробелами.txt"), "____________.txt");
+        assert_eq!(sanitize_filename("file with spaces.doc"), "file_with_spaces.doc");
+        assert_eq!(sanitize_filename("спец!@#$%символы.xlsx"), "____.xlsx");
+        assert_eq!(sanitize_filename(""), "");
     }
 }
