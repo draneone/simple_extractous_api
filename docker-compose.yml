@@ -1,17 +1,23 @@
+version: '3.8'
+
 services:
   extractous-api:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
+      args:
+        TESSERACT_LANGUAGES: ${TESSERACT_LANGUAGES:-eng+rus}
     container_name: extractous-api
     restart: unless-stopped
     ports:
       - "8280:8080"
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=${RUST_LOG:-info}
+      - TESSERACT_LANGUAGES=${TESSERACT_LANGUAGES:-eng+rus}
+      - ACTIX_CORS_ORIGIN=${ACTIX_CORS_ORIGIN:-*}
+      - ACTIX_BEARER_TOKEN=${ACTIX_BEARER_TOKEN}
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8080
-      - TESSERACT_LANGUAGES=eng+rus
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -39,3 +45,6 @@ services:
 networks:
   extractous-network:
     driver: bridge
+
+# Example usage:
+# TESSERACT_LANGUAGES=eng+rus+fra+deu docker-compose up --build

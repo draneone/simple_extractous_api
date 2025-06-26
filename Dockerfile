@@ -31,16 +31,26 @@ RUN find /usr/local/cargo/registry -name "*.so*" -exec cp {} /tmp/ \; 2>/dev/nul
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    tesseract-ocr-rus \
-    libssl3 \
-    ca-certificates \
-    openjdk-17-jre-headless \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Accept build argument for tesseract languages
+ARG TESSERACT_LANGUAGES=eng+rus
+
+# Install base runtime dependencies and dynamically install tesseract language packages
+RUN apt-get update && \
+    # Install base packages
+    apt-get install -y \
+        tesseract-ocr \
+        libssl3 \
+        ca-certificates \
+        openjdk-17-jre-headless \
+        curl && \
+    # Parse TESSERACT_LANGUAGES and install language packages
+    echo "$TESSERACT_LANGUAGES" | tr '+' '\n' | while read lang; do \
+        if [ -n "$lang" ]; then \
+            echo "Installing tesseract-ocr-$lang"; \
+            apt-get install -y tesseract-ocr-$lang || echo "Warning: tesseract-ocr-$lang not found"; \
+        fi; \
+    done && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set environment variables
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
@@ -48,6 +58,7 @@ ENV LD_LIBRARY_PATH=$JAVA_HOME/lib/server:$JAVA_HOME/lib
 ENV RUST_LOG=info
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8080
+ENV TESSERACT_LANGUAGES=$TESSERACT_LANGUAGES
 
 # Create non-root user
 RUN useradd --system --create-home --shell /bin/false extractous
