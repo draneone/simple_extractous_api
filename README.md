@@ -150,6 +150,14 @@ SERVER_PORT=8080
 
 # OCR languages (use + to combine multiple)
 TESSERACT_LANGUAGES=eng+rus
+
+# CORS allowed origins (comma-separated, default: '*')
+ACTIX_CORS_ORIGIN="*"
+# Example: ACTIX_CORS_ORIGIN="https://myapp.com,https://admin.myapp.com"
+
+# Bearer token for authentication (optional)
+ACTIX_BEARER_TOKEN="your_secret_token"
+# If set, /parse/files and /parse/urls require 'Authorization: Bearer <token>' header
 ```
 
 ### Adding OCR Languages

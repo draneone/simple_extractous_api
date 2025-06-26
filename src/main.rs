@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
     time::Instant,
+    env,
 };
 
 use actix_multipart::Multipart;
@@ -13,6 +14,8 @@ use actix_web::{
     get, post, web,
     http::{StatusCode, header::ContentType},
     middleware::{Logger, DefaultHeaders},
+    dev::{ServiceRequest, ServiceResponse, forward_ready, Transform},
+    Error as ActixError,
 };
 use extractous::Extractor;
 use futures_util::TryStreamExt;
@@ -21,6 +24,8 @@ use thiserror::Error;
 use tokio::fs::File as AsyncFile;
 use tokio::io::AsyncWriteExt;
 use tracing::{info, warn, error, debug, instrument};
+use actix_cors::Cors;
+use futures_util::future::{ok, Ready, LocalBoxFuture};
 
 use processor::create_extractor;
 use uuid::Uuid;
@@ -405,6 +410,76 @@ async fn parse_files_handler(
     }))
 }
 
+// Bearer token middleware
+pub struct BearerAuth {
+    token: Option<String>,
+}
+
+impl BearerAuth {
+    pub fn new(token: Option<String>) -> Self {
+        Self { token }
+    }
+}
+
+impl<S, B> Transform<S, ServiceRequest> for BearerAuth
+where
+    S: actix_web::dev::Service<ServiceRequest, Response = ServiceResponse<B>, Error = ActixError> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = ActixError;
+    type Transform = BearerAuthMiddleware<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ok(BearerAuthMiddleware {
+            service,
+            token: self.token.clone(),
+        })
+    }
+}
+
+pub struct BearerAuthMiddleware<S> {
+    service: S,
+    token: Option<String>,
+}
+
+impl<S, B> actix_web::dev::Service<ServiceRequest> for BearerAuthMiddleware<S>
+where
+    S: actix_web::dev::Service<ServiceRequest, Response = ServiceResponse<B>, Error = ActixError> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = ActixError;
+    type Future = LocalBoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let token = self.token.clone();
+        let path = req.path().to_string();
+        let is_protected = path == "/parse/files" || path == "/parse/urls";
+        let auth_header = req.headers().get("Authorization").cloned();
+        let fut = self.service.call(req);
+        Box::pin(async move {
+            if let Some(token) = token {
+                if is_protected {
+                    match auth_header.and_then(|h| h.to_str().ok().map(|s| s.to_string())) {
+                        Some(header) if header == format!("Bearer {}", token) => {
+                            // OK
+                        }
+                        _ => {
+                            return Err(actix_web::error::ErrorUnauthorized("Invalid or missing Bearer token"));
+                        }
+                    }
+                }
+            }
+            fut.await
+        })
+    }
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     // Initialize tracing with better formatting for debugging
@@ -426,6 +501,16 @@ async fn main() -> std::io::Result<()> {
     let extractor = Arc::new(create_extractor());
     info!("✅ Extractor initialized successfully");
 
+    // Read CORS and Bearer token config from env
+    let cors_origins = env::var("ACTIX_CORS_ORIGIN").unwrap_or_else(|_| "*".to_string());
+    let allowed_origins: Vec<String> = cors_origins.split(',').map(|s| s.trim().to_string()).collect();
+    let bearer_token = env::var("ACTIX_BEARER_TOKEN").ok();
+
+    info!("CORS allowed origins: {:?}", allowed_origins);
+    if let Some(_) = bearer_token {
+        info!("Bearer token authentication enabled");
+    }
+
     info!(
         version = env!("CARGO_PKG_VERSION"),
         "🚀 Extractous Document Processing API Started"
@@ -438,15 +523,25 @@ async fn main() -> std::io::Result<()> {
     info!("---");
 
     HttpServer::new(move || {
+        let mut cors = Cors::default();
+        for origin in &allowed_origins {
+            if origin == "*" {
+                cors = cors.allow_any_origin();
+            } else {
+                cors = cors.allowed_origin(origin);
+            }
+        }
+        cors = cors.allowed_methods(vec!["GET", "POST", "OPTIONS"])
+            .allowed_headers(vec!["Content-Type", "Authorization"])
+            .supports_credentials();
+
         App::new()
             .app_data(web::Data::new(Arc::clone(&extractor)))
             .app_data(web::Data::new(start_time))
             .app_data(web::PayloadConfig::new(52_428_800)) // 50MB limit
-            .wrap(DefaultHeaders::new()
-                .add(("Access-Control-Allow-Origin", "*"))
-                .add(("Access-Control-Allow-Methods", "GET, POST, OPTIONS"))
-                .add(("Access-Control-Allow-Headers", "Content-Type")))
+            .wrap(cors)
             .wrap(Logger::new("🔄 %a \"%r\" %s %b \"%{Referer}i\" \"%{User-Agent}i\" %T"))
+            .wrap(BearerAuth::new(bearer_token.clone()))
             .service(health_check)
             .service(parse_urls_handler)
             .service(parse_files_handler)
